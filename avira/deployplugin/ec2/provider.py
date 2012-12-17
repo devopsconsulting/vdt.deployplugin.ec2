@@ -43,7 +43,7 @@ class Provider(api.CmdApi):
                 else:
                     instances.append({'displayname' : i.tags['Name'] if 'Name' in i.tags else 'N/A',
                                       'id' : i.id,
-                                      'state' : i._state,
+                                      'state' : type(i._state),
                                       'dns': i.public_dns_name})
         pretty.machine_print(instances)
 
@@ -126,14 +126,8 @@ class Provider(api.CmdApi):
                                              instance_type=cfg.INSTANCE_TYPE,
                                              user_data=ud)
 
-        #print dir(response)
-        #print response
-        #pprint.pprint(vars(response))
-        #print "instance"
-        #pprint.pprint(vars(response.instances[0]))
-
+        # Set instance name
         instance = response.instances[0]
-
         self.client.create_tags([instance.id], {"Name": displayname})
 
         # we add the machine id to the cert req file, so the puppet daemon
@@ -220,6 +214,7 @@ class Provider(api.CmdApi):
 
             ec2> reboot <instance_id>
         """
+        print "rebooting instance id {0}".format(instance_id)
         self.client.reboot_instances(instance_ids=[instance_id])
 
     def do_list(self, resource_type):
@@ -228,90 +223,57 @@ class Provider(api.CmdApi):
 
         Usage::
 
-            cloudstack> list <templates|serviceofferings|regions|addresses|images
-                          diskofferings|ip|networks|portforwardings|
-                          firewall>
+            cloudstack> list <regions|eip|images|placement-groups
+                          volumes|security-groups>
         """
 
-        if resource_type == "templates":
-            zone_map = {x['id']: x['name'] for x in self.client.listZones({})}
-            templates = self.client.listTemplates({
-                "templatefilter": "executable"
-            })
-            templates = sort_by_key(templates, 'name')
-            pretty.templates_print(templates, zone_map)
-        elif resource_type == "regions":
+        if resource_type == "regions":
             for r in self.client.get_all_regions():
                 print r.name
-        elif resource_type == "addresses":
+        elif resource_type == "eip":
+            print "%17s\t%15s\t%s" % ("address", "region", "instance")
             for r in self.client.get_all_addresses():
+                print "%17s\t%15s\t%s" % (r.public_ip, r.region.name, r.instance_id)
+        elif resource_type == "placement-groups":
+            for r in self.client.get_all_placement_groups():
+                pprint.pprint(vars(r))
                 print r
-        elif resource_type == "serviceofferings":
-            serviceofferings = self.client.listServiceOfferings()
-            pretty.serviceofferings_print(serviceofferings)
-
-        elif resource_type == "diskofferings":
-            diskofferings = self.client.listDiskOfferings()
-            pretty.diskofferings_print(diskofferings)
-
-        elif resource_type == "ip":
-            ipaddresses = self.client.listPublicIpAddresses()
-            pretty.public_ipaddresses_print(ipaddresses)
-
-        elif resource_type == "networks":
-            networks = self.client.listNetworks({
-                'zoneid': cfg.ZONEID
-            })
-            networks = sort_by_key(networks, 'id')
-            pretty.networks_print(networks)
-
-        elif resource_type == "portforwardings":
-            portforwardings = self.client.listPortForwardingRules({
-                'domain': cfg.DOMAINID
-            })
-            portforwardings = sort_by_key(portforwardings, 'privateport')
-            portforwardings.reverse()
-            pretty.portforwardings_print(portforwardings)
-        elif resource_type == "firewall":
-            firewall_rules = self.client.listFirewallRules({
-                'domain': cfg.DOMAINID
-            })
-            firewall_rules = sort_by_key(firewall_rules, 'ipaddress')
-            firewall_rules.reverse()
-            pretty.firewallrules_print(firewall_rules)
+        elif resource_type == "volumes":
+            for r in self.client.get_all_volumes():
+                pprint.pprint(vars(r))
+                print r
+        elif resource_type == "security-groups":
+            for r in self.client.get_all_security_groups():
+                pprint.pprint(vars(r))
+                print r
         else:
             print "Not implemented"
 
     def do_request(self, request_type):
         """
-        Request a public ip address on the virtual router
+        Request a public elastic ip address
 
         Usage::
 
-            cloudstack> request ip
+            ec2> request eip
         """
-        if request_type == "ip":
-            response = self.client.associateIpAddress({
-                'zoneid': cfg.ZONEID
-            })
-            print "created ip address with id %(id)s" % response
-
+        if request_type == "eip":
+            response = self.client.allocate_address()
+            print "created eip address {0}".format(response.public_ip)
         else:
             print "Not implemented"
 
-    def do_release(self, request_type, release_id):
+    def do_release(self, request_type, public_ip):
         """
         Release a public ip address with a specific id.
 
         Usage::
 
-            cloudstack> release ip <release_id>
+            ec2> release eip <public_ip>
         """
-        if request_type == "ip":
-            response = self.client.disassociateIpAddress({
-                'id': release_id
-            })
-            print "releasing ip address, job id: %(jobid)s" % response
+        if request_type == "eip":
+            print "releasing ip address {0}".format(public_ip)
+            self.client.release_address(public_ip=public_ip)
         else:
             print "Not implemented"
 
