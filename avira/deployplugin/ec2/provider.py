@@ -17,7 +17,8 @@ import pprint
 
 class Provider(api.CmdApi):
     """ EC2 Deployment CMD Provider """
-    prompt = "ec2> "
+    #make the promt colored
+    prompt = "\033[92mec2>\033[0m "
 
     def __init__(self):
         self.client = boto.ec2.connect_to_region(cfg.REGION,
@@ -47,15 +48,24 @@ class Provider(api.CmdApi):
                                       'dns': i.dns_name}
         #pretty.machine_print(instances)
 
-    def do_create_keypair(self, keypair_name):
+    def do_create_keypair(self, keypair_name, path=None):
         """
-        Create a new keypair
+        Create a new keypair. 
+        If it should be saved to disk, specify a folder, where the key is saved as a file with the name <keypair_name>.
+        e.g. "ec2> create_keypair mykey /home/user/keys/" will save the keyfile in "/home/user/keys/mykey".
 
         Usage::
 
-            ec2> create_keypair name
+            ec2> create_keypair name [/path/to/folder/]
         """
-        print self.client.create_key_pair(keypair_name)
+        keypair = self.client.create_key_pair(keypair_name)
+        print "%25s - %s"%(keypair.name, keypair.fingerprint)
+        if path:
+            try:
+                keypair.save(path)
+            except Exception, e:
+                print "couldn't save key: %s"%e
+            
 
     def do_delete_keypair(self, keypair_name):
         """
@@ -65,7 +75,7 @@ class Provider(api.CmdApi):
 
             ec2> delete_keypair name
         """
-        self.client.delete_key_pair(keypair_name)
+        print self.client.delete_key_pair(keypair_name)
 
     def do_list_keypairs(self):
         """
@@ -77,7 +87,6 @@ class Provider(api.CmdApi):
         """
         print "{0:<15}\t{1:<15}\t{2}".format("Name", "Region", "Fingerprint")
         for i in self.client.get_all_key_pairs():
-            print dir(i)
             print "{0:<15}\t{1:<15}\t{2}".format(i.name, i.region.name, i.fingerprint)
 
     def do_deploy(self, ami, key_name, displayname, security_groups, base=False, **userdata):
