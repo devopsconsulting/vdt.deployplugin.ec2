@@ -232,8 +232,8 @@ class Provider(api.CmdApi):
         
         Usage::
         
-        cloudstack> list <regions|eip|images|placement-groups
-        volumes|security-groups>
+            cloudstack> list <regions|eip|images|placement-groups
+            volumes|security-groups>
         """
 
         if resource_type == "regions":
