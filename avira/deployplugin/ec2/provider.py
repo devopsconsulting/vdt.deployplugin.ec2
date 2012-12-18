@@ -41,11 +41,11 @@ class Provider(api.CmdApi):
                 if mode == "detailed":
                     pprint.pprint(vars(i))
                 else:
-                    instances.append({'displayname' : i.tags['Name'] if 'Name' in i.tags else 'N/A',
+                    print "%(displayname)20s %(id)20s %(state)15s   %(dns)s" % {'displayname' : i.tags['Name'] if 'Name' in i.tags else 'N/A',
                                       'id' : i.id,
-                                      'state' : type(i._state),
-                                      'dns': i.public_dns_name})
-        pretty.machine_print(instances)
+                                      'state' : i._state,
+                                      'dns': i.dns_name}
+        #pretty.machine_print(instances)
 
     def do_create_keypair(self, keypair_name):
         """
@@ -80,19 +80,19 @@ class Provider(api.CmdApi):
             print dir(i)
             print "{0:<15}\t{1:<15}\t{2}".format(i.name, i.region.name, i.fingerprint)
 
-    def do_deploy(self, image_id, key_name, displayname, base=False, networkids="", **userdata):
+    def do_deploy(self, ami, key_name, displayname, security_groups, base=False, **userdata):
         """
         Create a vm with a specific name and add some userdata.
 
         Usage::
 
-            ec2> deploy <image-id> <key_name> <displayname> <userdata>
+            ec2> deploy <ami> <key_name> <name> <security-groups> <userdata>
                     optional: <base>
 
         To specify the puppet role in the userdata, which will install and
         configure the machine according to the specified role use::
 
-            ec2> deploy loadbalancer1 role=lvs
+            ec2> deploy ami-c1aaabb5 ssh_key loadbalancer1 default role=lvs
 
         To specify additional user data, specify additional keywords::
 
@@ -104,7 +104,7 @@ class Provider(api.CmdApi):
         you can specify 'base' as a optional parameter. This is needed for the
         puppetmaster which needs manual installation::
 
-            ec2> deploy puppetmaster role=puppetmaster base
+            ec2> deploy puppetmaster base role=puppetmaster
 
         """
         if not userdata:
@@ -120,10 +120,11 @@ class Provider(api.CmdApi):
         #    [x['displayname'] for x in vms if x['state'] not in KILLED]
 
         cloudinit_url = cfg.CLOUDINIT_BASE if base else cfg.CLOUDINIT_PUPPET
-        ud = UserData(cloudinit_url, cfg.PUPPETMASTER, **userdata).base64()
-        response = self.client.run_instances(image_id,
+        ud = UserData(cloudinit_url, cfg.PUPPETMASTER, **userdata).formatted_data()
+        response = self.client.run_instances(ami,
                                              key_name=key_name,
                                              instance_type=cfg.INSTANCE_TYPE,
+                                             security_groups=security_groups.split(","),
                                              user_data=ud)
 
         # Set instance name
@@ -223,8 +224,7 @@ class Provider(api.CmdApi):
 
         Usage::
 
-            cloudstack> list <regions|eip|images|placement-groups
-                          volumes|security-groups>
+            ec2> list <regions|eip|images|placement-groups|volumes|security-groups>
         """
 
         if resource_type == "regions":
@@ -277,86 +277,6 @@ class Provider(api.CmdApi):
         else:
             print "Not implemented"
 
-    def do_portfw(self, machine_id, ip_id, public_port, private_port):
-        """
-        Create a portforward for a specific machine and ip
-
-        Usage::
-
-            cloudstack> portfw <machine id> <ip id> <public port> <private port>
-
-        You can get the machine id by using the following command::
-
-            cloudstack> status
-
-        You can get the listed ip's by using the following command::
-
-            cloudstack> list ip
-        """
-
-        self.client.createPortForwardingRule({
-            'ipaddressid': ip_id,
-            'privateport': private_port,
-            'publicport': public_port,
-            'protocol': 'TCP',
-            'virtualmachineid': machine_id
-        })
-        print "added portforward for machine %s (%s -> %s)" % (
-            machine_id, public_port, private_port)
-
-    def do_ssh(self, machine_id, ssh_public_port):
-        """
-        Make a machine accessible through ssh.
-
-        Usage::
-
-            cloudstack> ssh <machine_id> <ssh_public_port>
-
-        This adds a port forward under the machine id to port 22 on the machine
-        eg:
-
-        machine id is 5034, after running::
-
-            cloudstack> ssh 5034 22001
-
-        I can now access the machine though ssh on all my registered ip
-        addresses as follows::
-
-            ssh ipaddress -p 22001
-        """
-        machines = self.client.listVirtualMachines({
-            'domainid': cfg.DOMAINID
-        })
-        machine = find_machine(machine_id, machines)
-        if machine is None:
-            print "machine with id %s is not found" % machine_id
-            return
-
-        portforwards = wrap(self.client.listPortForwardingRules())
-
-        def select_ssh_pfwds(pf):
-            return pf.virtualmachineid == machine.id and pf.publicport == ssh_public_port
-        existing_ssh_pfwds = filter(select_ssh_pfwds, portforwards)
-
-        # add the port forward to each public ip, if it doesn't exist yet.
-        ips = wrap(self.client.listPublicIpAddresses()['publicipaddress'])
-        for ip in ips:
-            current_fw = find_by_key(existing_ssh_pfwds, ipaddressid=ip.id)
-            if current_fw is not None:
-                print "machine %s already has a ssh portforward with ip %s to port %s" % (
-                    machine_id, ip.ipaddress, ssh_public_port)
-                continue
-            else:
-                self.client.createPortForwardingRule({
-                    'ipaddressid': ip.id,
-                    'privateport': "22",
-                    'publicport': str(ssh_public_port),
-                    'protocol': 'TCP',
-                    'virtualmachineid': machine.id,
-                    'openfirewall': "True",
-                })
-                print "machine %s is now reachable (via %s:%s)" % (
-                    machine_id, ip.ipaddress, ssh_public_port)
 
     def do_kick(self, machine_id=None, role=None):
         """
