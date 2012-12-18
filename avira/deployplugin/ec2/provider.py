@@ -229,10 +229,11 @@ class Provider(api.CmdApi):
     def do_list(self, resource_type):
         """
         List information about current EC2 configuration.
-        
+
         Usage::
-        
-            ec2> list <regions|eip|images|placement-groups|volumes|security-groups>
+
+            cloudstack> list <regions|eip|images|placement-groups
+                          volumes|security-groups>
         """
 
         if resource_type == "regions":
