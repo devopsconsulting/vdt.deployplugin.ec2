@@ -1,6 +1,7 @@
 import subprocess
 
 import boto.ec2
+import boto.vpc
 
 from avira.deploy import api, pretty
 from avira.deploy.clean import run_machine_cleanup, \
@@ -21,10 +22,24 @@ class Provider(api.CmdApi):
     prompt = "\033[92mec2>\033[0m "
 
     def __init__(self):
+        region = None
+
+        for r in boto.ec2.regions(aws_access_key_id=cfg.ACCESSKEY,
+                                  aws_secret_access_key=cfg.SECRETKEY,
+                                  debug=2):
+            if r.name == cfg.REGION:
+                region = r
+                break
+
         self.client = boto.ec2.connect_to_region(cfg.REGION,
                                                  aws_access_key_id=cfg.ACCESSKEY,
                                                  aws_secret_access_key=cfg.SECRETKEY,
                                                  debug=2)
+
+        self.vpc = boto.vpc.VPCConnection(region=region,
+                                          aws_access_key_id=cfg.ACCESSKEY,
+                                          aws_secret_access_key=cfg.SECRETKEY,
+                                          debug=2)
         api.CmdApi.__init__(self)
 
     def do_status(self, mode=False):
@@ -50,7 +65,7 @@ class Provider(api.CmdApi):
 
     def do_create_keypair(self, keypair_name, path=None):
         """
-        Create a new keypair. 
+        Create a new keypair.
         If it should be saved to disk, specify a folder, where the key is saved as a file with the name <keypair_name>.
         e.g. "ec2> create_keypair mykey /home/user/keys/" will save the keyfile in "/home/user/keys/mykey".
 
@@ -65,7 +80,7 @@ class Provider(api.CmdApi):
                 keypair.save(path)
             except Exception, e:
                 print "couldn't save key: %s"%e
-            
+
 
     def do_delete_keypair(self, keypair_name):
         """
@@ -233,7 +248,8 @@ class Provider(api.CmdApi):
 
         Usage::
 
-            ec2> list <regions|eip|images|placement-groups|volumes|security-groups>
+            ec2> list <regions|eip|images|placement-groups|volumes|security-groups
+                 vpc-subnets|vpc-customer-gateways|vpc-internet-gateways|vpcs>
         """
 
         if resource_type == "regions":
@@ -255,8 +271,34 @@ class Provider(api.CmdApi):
             for r in self.client.get_all_security_groups():
                 pprint.pprint(vars(r))
                 print r
+        elif resource_type == "vpc-subnets":
+            for subnet in self.vpc.get_all_subnets():
+                pprint.pprint(vars(subnet))
+                print subnet
+        elif resource_type == "vpc-customer-gateways":
+            for cgw in self.vpc.get_all_customer_gateways():
+                pprint.pprint(vars(cgw))
+                print cgw
+        elif resource_type == "vpc-internet-gateways":
+            for igw in self.vpc.get_all_internet_gateways():
+                pprint.pprint(vars(igw))
+                print igw
+        elif resource_type == "vpcs":
+            for v in self.vpc.get_all_vpcs():
+                pprint.pprint(vars(v))
+                print v
         else:
             print "Not implemented"
+
+    def do_vpc(self, request_type):
+        """
+        VPC related operations
+
+        Usage::
+
+           ec2> vpc <subnet>
+        """
+        pass
 
     def do_request(self, request_type):
         """
