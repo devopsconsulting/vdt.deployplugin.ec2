@@ -42,26 +42,18 @@ class Provider(api.CmdApi):
                                           debug=2)
         api.CmdApi.__init__(self)
 
-    def do_status(self, mode=False):
+    def do_status(self, instance):
         """
-        Shows running instances, specify 'all' to show all instances
+        Shows details about the given instance
 
         Usage::
 
-            ec2> status [detailed]
+            ec2> status <instance_id>
         """
-        instances = []
-        reservations = self.client.get_all_instances()
+        reservations = self.client.get_all_instances(instance_ids=[instance])
         for r in reservations:
             for i in r.instances:
-                if mode == "detailed":
-                    pprint.pprint(vars(i))
-                else:
-                    print "%(displayname)20s %(id)20s %(state)15s   %(dns)s" % {'displayname' : i.tags['Name'] if 'Name' in i.tags else 'N/A',
-                                      'id' : i.id,
-                                      'state' : i._state,
-                                      'dns': i.dns_name}
-        #pretty.machine_print(instances)
+                pprint.pprint(vars(i))
 
     def do_create_keypair(self, keypair_name, path=None):
         """
@@ -92,13 +84,13 @@ class Provider(api.CmdApi):
         """
         print self.client.delete_key_pair(keypair_name)
 
-    def do_deploy(self, ami, key_name, displayname, security_groups, base=False, **userdata):
+    def do_deploy(self, displayname, ami, key_name, security_groups, subnet_id=None, base=False, **userdata):
         """
         Create a vm with a specific name and add some userdata.
 
         Usage::
 
-            ec2> deploy <ami> <key_name> <name> <security-groups> <userdata>
+            ec2> deploy <name> <ami> <key_name> <security-groups> <userdata>
                     optional: <base>
 
         To specify the puppet role in the userdata, which will install and
@@ -136,6 +128,7 @@ class Provider(api.CmdApi):
         response = self.client.run_instances(ami,
                                              key_name=key_name,
                                              instance_type=cfg.INSTANCE_TYPE,
+                                             subnet_id=subnet_id,
                                              security_groups=security_groups.split(","),
                                              user_data=ud)
 
@@ -150,67 +143,6 @@ class Provider(api.CmdApi):
 
         print "%s started, machine id %s" % (displayname, instance.id)
 
-    def do_deploy_vpc(self, displayname, ami, key_name, security_groups, subnet_id, base=False, **userdata):
-        """
-        Create a vm in a VPC, with a specific name and add some userdata.
-
-        Usage::
-
-            ec2> deploy_vpc <name> <ami> <key_name> <security-groups-ids> <subnet_id> <userdata>
-                    optional: <base>
-
-        To specify the puppet role in the userdata, which will install and
-        configure the machine according to the specified role use::
-
-            ec2> deploy_vpc loadbalancer1 ami-c1aaabb5 ssh_key default role=lvs
-
-        To specify additional user data, specify additional keywords::
-
-            ec2> deploy_vpc loadbalancer1 role=lvs environment=test etc=more
-
-        This will install the machine as a Linux virtual server.
-
-        If you don't want pierrot-agent (puppet agent) automatically installed,
-        you can specify 'base' as a optional parameter. This is needed for the
-        puppetmaster which needs manual installation::
-
-            ec2> deploy_vpc puppetmaster base role=puppetmaster
-
-        """
-        if not userdata:
-            print "Specify the machine userdata, (at least it's role)"
-            return
-
-        #vms = self.client.listVirtualMachines({
-        #    'domainid': cfg.DOMAINID
-        #})
-
-        #KILLED = ['Destroyed', 'Expunging']
-        #existing_displaynames = \
-        #    [x['displayname'] for x in vms if x['state'] not in KILLED]
-
-        try:
-            cloudinit_url = cfg.CLOUDINIT_BASE if base else cfg.CLOUDINIT_PUPPET
-            ud = UserData(cloudinit_url, cfg.PUPPETMASTER, **userdata).formatted_data()
-            response = self.client.run_instances(ami,
-                key_name=key_name,
-                instance_type=cfg.INSTANCE_TYPE,
-                subnet_id=subnet_id,
-                security_group_ids=security_groups.split(","),
-                user_data=ud)
-
-            # Set instance name
-            instance = response.instances[0]
-            self.client.create_tags([instance.id], {"Name": displayname})
-
-            # we add the machine id to the cert req file, so the puppet daemon
-            # can sign the certificate
-            if not base:
-                add_pending_certificate(instance.id)
-
-            print "%s started, machine id %s" % (displayname, instance.id)
-        except Exception as e:
-            print "EXCEPTION: ", e
 
     def do_destroy(self, instance_id):
         """
@@ -289,15 +221,16 @@ class Provider(api.CmdApi):
         print "rebooting instance id {0}".format(instance_id)
         self.client.reboot_instances(instance_ids=[instance_id])
 
-    def do_list(self, resource_type):
+    def do_list(self, resource_type, *args):
         """
         List information about current EC2 configuration.
 
         Usage::
 
-            ec2> list <regions|key-pairs|eip|images|placement-groups|volumes|security-groups
-                 vpc-subnets|vpc-customer-gateways|vpc-internet-gateways|vpc-vpn-gateways|
-                 vpc-vpn-connections|vpcs>
+            ec2> list regions|key-pairs|eip|images|instances|placement-groups|volumes|security-groups|vpc
+
+            ec2> list vpc subnets|customer-gateways|internet-gateways|vpn-gateways|vpn-connections
+
         """
 
         if resource_type == "regions":
@@ -315,6 +248,16 @@ class Provider(api.CmdApi):
             print "{0:<15}\t{1:<15}\t{2:<15}\t{3:<15}".format("Name", "Region", "Strategy", "State")
             for r in self.client.get_all_placement_groups():
                 print "{0:<15}\t{1:<15}\t{2:<15}\t{3:<15}".format(r.name, r.region.name, r.strategy, r.state)
+        elif resource_type == "instances":
+            reservations = self.client.get_all_instances()
+            print "{0:<15}\t{1:<20}\t{2:<15}\t{3:<15}\t{4}".format("Id", "Name", "VPC Id", "State", "Dns")
+            for r in reservations:
+                for i in r.instances:
+                    print "{0:<15}\t{1:<20}\t{2:<15}\t{3:<15}\t{4}".format(i.id,
+                            i.tags['Name'] if 'Name' in i.tags else 'N/A',
+                            i.vpc_id,
+                            i._state,
+                            i.dns_name)
         elif resource_type == "volumes":
             print "{0:<15}\t{1:<15}\t{2:<20}\t{3:<10}\t{4:<15}\t{5:<15}\t{6}".format("Id", "Region", "Snapshot", "Size", "Status", "Zone", "Created")
             for r in self.client.get_all_volumes():
@@ -333,11 +276,11 @@ class Provider(api.CmdApi):
                     if not printed_first_line:
                         printed_first_line = True
                         print "{0:<15}\t{1:<15}\t{2:<15}\t{3:<20}\t{4:<20}\t{5:<20}".format(r.id,
-                                                                               r.region.name,
-                                                                               r.vpc_id,
-                                                                               r.name,
-                                                                               ingress_rule and ingress_rule or "",
-                                                                               egress_rule and egress_rule or "")
+                                                                                            r.region.name,
+                                                                                            r.vpc_id,
+                                                                                            r.name,
+                                                                                            ingress_rule and ingress_rule or "",
+                                                                                            egress_rule and egress_rule or "")
                     else:
                         print "{0:<15}\t{1:<15}\t{2:<15}\t{3:<20}\t{4:<20}\t{5:<20}".format("",
                                                                                             "",
@@ -345,42 +288,52 @@ class Provider(api.CmdApi):
                                                                                             "",
                                                                                             ingress_rule and ingress_rule or "",
                                                                                             egress_rule and egress_rule or "")
-        elif resource_type == "vpc-subnets":
-            for subnet in self.vpc.get_all_subnets():
-                pprint.pprint(vars(subnet))
-                print subnet
-        elif resource_type == "vpc-customer-gateways":
-            for cgw in self.vpc.get_all_customer_gateways():
-                pprint.pprint(vars(cgw))
-                print cgw
-        elif resource_type == "vpc-internet-gateways":
-            for igw in self.vpc.get_all_internet_gateways():
-                pprint.pprint(vars(igw))
-                print igw
-        elif resource_type == "vpc-vpn-gateways":
-            for vgw in self.vpc.get_all_vpn_gateways():
-                pprint.pprint(vars(vgw))
-                print vgw
-        elif resource_type == "vpc-vpn-connections":
-            for c in self.vpc.get_all_vpn_connections():
-                pprint.pprint(vars(c))
-                print c
-        elif resource_type == "vpcs":
-            for v in self.vpc.get_all_vpcs():
-                pprint.pprint(vars(v))
-                print v
-        else:
-            print "Not implemented"
+        elif resource_type == "vpc":
+            if len(args) == 0:
+                print "{0:<15}\t{1:<15}\t{2:<15}\t{3}".format("Id", "Region", "State", "CIDR")
+                for v in self.vpc.get_all_vpcs():
+                    print "{0:<15}\t{1:<15}\t{2:<15}\t{3}".format(v.id, v.region.name, v.state, v.cidr_block)
+            elif args[0] == "subnets":
+                print "{0:<15}\t{1:<15}\t{2:<6}\t{3:<15}\t{4:<15}\t{5:<15}\t{6}".format("Id", "Zone", "AvailIP", "CIDR", "Region", "State", "VPC-ID")
+                for s in self.vpc.get_all_subnets():
+                    print "{0:<15}\t{1:<15}\t{2:<6}\t{3:<15}\t{4:<15}\t{5:<15}\t{6}".format(s.id,
+                                                                                            s.availability_zone,
+                                                                                            s.available_ip_address_count,
+                                                                                            s.cidr_block,
+                                                                                            s.region.name,
+                                                                                            s.state,
+                                                                                            s.vpc_id)
+            elif args[0] == "customer-gateways":
+                for cgw in self.vpc.get_all_customer_gateways():
+                    pprint.pprint(vars(cgw))
+                    print cgw
+            elif args[0] == "internet-gateways":
+                for igw in self.vpc.get_all_internet_gateways():
+                    pprint.pprint(vars(igw))
+                    print igw
+            elif args[0] == "vpn-gateways":
+                for vgw in self.vpc.get_all_vpn_gateways():
+                    pprint.pprint(vars(vgw))
+                    print vgw
+            elif args[0] == "vpn-connections":
+                for c in self.vpc.get_all_vpn_connections():
+                    pprint.pprint(vars(c))
+                    print c
+            else:
+                print "not implemented"
 
-    def do_vpc(self, request_type):
+    def do_vpc(self, request_type, *args):
         """
         VPC related operations
 
         Usage::
 
-           ec2> vpc <subnet>
+           ec2> vpc create <vpc_id> <cidr_block>
         """
-        pass
+        if request_type == "create":
+            print "creating subnet {0} in vpc {1}".format(args[1], args[0])
+            print self.vpc.create_subnet(args[0], args[1])
+
 
     def do_request(self, request_type):
         """
